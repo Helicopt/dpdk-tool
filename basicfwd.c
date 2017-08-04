@@ -40,6 +40,7 @@
 #include <rte_mbuf.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <time.h>
 
 #define RX_RING_SIZE 128
 #define TX_RING_SIZE 512
@@ -192,8 +193,25 @@ lcore_main(void)
 			}
 
 			/* Send burst of TX packets, to second port of pair. */
+			printf("\ntest: resend: %u\n", clock());
+			const uint16_t nb_tx_test = rte_eth_tx_burst(port, 0,
+					bufs, nb_rx);
+			printf("test: after %u resend: %u\n", nb_tx_test, clock());
+			printf("\nbefore resend: %u\n", clock());
+			
+			int T = 10;
+			while (T--) {
+				int i;
+				for (i = 0; i < nb_rx; ++i) {
+					unsigned char * d = ((unsigned char *)bufs[i]) + 256;
+					*(d+14+1) = 0x14;
+				}
+			}
+
+			printf("modified: %u\n", clock());
 			const uint16_t nb_tx = rte_eth_tx_burst(port, 0,
 					bufs, nb_rx);
+			printf("after %u resend: %u\n", nb_tx, clock());
 			txcnt+=nb_tx;
 
 			/* Free any unsent packets. */
