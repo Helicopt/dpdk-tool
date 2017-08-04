@@ -48,7 +48,7 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 64
 
-volatile int tot, tmpc;
+volatile int tot, tmpc, txcnt;
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
@@ -113,6 +113,16 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	return 0;
 }
 
+inline void printMac(unsigned char * d) {
+	int i;
+	for (i=0;i<6;++i)
+		printf("\x1b[33m%02x \x1b[0m", d[i]);
+}
+
+inline void printIP(unsigned char * d) {
+	printf("\x1b[33m%3d.%3d.%3d.%3d \x1b[0m",*d,*(d+1),*(d+2),*(d+3));
+}
+
 /*
  * The lcore main. This is the main thread that does the work, reading from
  * an input port and writing to an output port.
@@ -155,12 +165,25 @@ lcore_main(void)
 			if (!k&&nb_rx>0) {
 				printf("\n[%u] recv: %u\n",port, nb_rx);
 				int i;
-				struct ether_hdr *eth = rte_pktmbuf_mtod(bufs[0], struct ether_hdr *);
-				unsigned char * d = (unsigned char *)(eth+1);
-				for (i=0;i<34;++i)
-					printf("\x1b[33m%02x ", d[i]);
+				//struct ether_hdr *eth = rte_pktmbuf_mtod((struct rte_mbuf *)(((unsigned char *)(bufs[0]))+128), struct ether_hdr *);
+				unsigned char * d = ((unsigned char *)(bufs[0]))+256;
+				puts("\nPkt:\n");
+				printf("Dst MAC: ");
+				printMac(d);
+				printf("Src MAC: ");
+				printMac(d+6);
+				unsigned char * ipd = d+14;
+				printf("IPv%d len: %d ",*ipd>>4, (*(ipd+2)<<8)|(*(ipd+3)));
+				printf("src IP: ");
+				printIP(ipd+12);
+				printf("dst IP: ");
+				printIP(ipd+16);
+				printf("protocol: %d, serv.: %x", *(ipd + 9), *(ipd + 1));
+				printf("\n\x1b[0m");
+				for (i = 0; i < 34; ++i) printf("\x1b[33m%02x \x1b[0m",d[i]);
 				printf("\n\x1b[0m");
 			}
+			
 			if (unlikely(nb_rx == 0))
 				continue;
 			else {
@@ -169,8 +192,9 @@ lcore_main(void)
 			}
 
 			/* Send burst of TX packets, to second port of pair. */
-			//const uint16_t nb_tx = rte_eth_tx_burst(port ^ 1, 0,
-			//		bufs, nb_rx);
+			const uint16_t nb_tx = rte_eth_tx_burst(port, 0,
+					bufs, nb_rx);
+			txcnt+=nb_tx;
 
 			/* Free any unsent packets. */
 			if (unlikely(0 < nb_rx)) {
@@ -184,13 +208,13 @@ lcore_main(void)
 
 void * disp_loop(void * x) {
 	int ts=0, ss=0;
-	tot=0;
+	tot=0; txcnt = 0;
 	for (;;) {
 		tmpc=0;
 		usleep(1000);
 		ts=1000;
 		ss+=1000;
-		printf("\r\x1b[?25lreal time: \x1b[34m%10.2f\x1b[0m Pkts/s,\t avg: \x1b[34m%10.2f\x1b[0m Pkts/s", (float)tmpc/ts*1000000, (float)tot/ss*1000000);
+		printf("\r\x1b[?25lreal time: \x1b[34m%10.2f\x1b[0m Pkts/s,\t avg: \x1b[34m%10.2f\x1b[0m Pkts/s total recv: \x1b[34m%d\x1b[0m Pkts, resend: %d", (float)tmpc/ts*1000000, (float)tot/ss*1000000, tot, txcnt);
 	}
 }
 
