@@ -48,14 +48,16 @@ cd app
 ln -s x86_64-native-linuxapp-gcc/pktgen pktgen
 ```
 5. config
+```
 cd YOURDIR
 cd dpdk-17.05.1
 ./usertools/dpdk-setup.sh
 \[15\] load igb uio module
 \[21\] bind devices (at least 2 devices)
 \[18\] set hugepages: 2048
-
+```
 6. run
+
 terminal1:
 ```sh
 cd YOURDIR/dpdk-17.05.1/examples/skeleton
@@ -68,11 +70,14 @@ sh ./test.sh
 ```
 
 7. expriment operation
+
 pktgen:
+```
 set 0 count 32 *port 0 send 32 pkts per burst*
 start 0 *start a burst*
-
+```
 skeleton - basicfwd:
+
 Nothing but observe some info
 
 ## Effect
