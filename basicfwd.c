@@ -50,6 +50,7 @@
 #define BURST_SIZE 64
 
 volatile int tot, tmpc, txcnt;
+int T = 10000;
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
@@ -124,6 +125,35 @@ inline void printIP(unsigned char * d) {
 	printf("\x1b[33m%3d.%3d.%3d.%3d \x1b[0m",*d,*(d+1),*(d+2),*(d+3));
 }
 
+#define black_list_cnt 2
+
+unsigned char black_list[black_list_cnt][4] = {{113,244,103,5}, {202,128,166,7}};
+
+inline int IPcmp(unsigned char * x, unsigned char * y) {
+	return !(*x==*y&&*(x+1)==*(y+1)&&*(x+2)==*(y+2)&&*(x+3)==*(y+3));
+}
+
+uint16_t _FireWall(struct rte_mbuf * b[], uint16_t n) {
+	uint16_t i, j, k;
+	k = 0;
+	for (i=0;i<n;++i) {
+		unsigned char * d = (unsigned char *)b[i];
+		d = d+256+14;
+		int flag = 1;
+		for (j=0;j<black_list_cnt&&flag;++j) {
+			if (IPcmp(d+12,(unsigned char *)black_list[j])==0) {
+				flag = 0;
+				printIP(d+12);
+				printf(" in black list.\n");
+			}
+		}
+		if (flag) {
+			memcpy(b[k++],b[i],sizeof(struct rte_mbuf));
+		}
+	}
+	return k;
+}
+
 /*
  * The lcore main. This is the main thread that does the work, reading from
  * an input port and writing to an output port.
@@ -159,10 +189,10 @@ lcore_main(void)
 
 			/* Get burst of RX packets, from first port of pair. */
 			struct rte_mbuf *bufs[BURST_SIZE];
-			const uint16_t nb_rx = rte_eth_rx_burst(port, 0,
+			uint16_t nb_rx = rte_eth_rx_burst(port, 0,
 					bufs, BURST_SIZE);
 			
-			int k = rand()%100000;
+			int k = rand()%10;
 			if (!k&&nb_rx>0) {
 				printf("\n[%u] recv: %u\n",port, nb_rx);
 				int i;
@@ -194,23 +224,38 @@ lcore_main(void)
 
 			/* Send burst of TX packets, to second port of pair. */
 			printf("\ntest: resend: %u\n", clock());
-			const uint16_t nb_tx_test = rte_eth_tx_burst(port, 0,
+			uint16_t nb_tx_test = rte_eth_tx_burst(port, 0,
 					bufs, nb_rx);
+			int h_send = nb_tx_test;
+			while (h_send<nb_rx) {
+					nb_tx_test = rte_eth_tx_burst(port, 0,
+					bufs + h_send, nb_rx - h_send);
+					h_send+=nb_tx_test;
+			}
 			printf("test: after %u resend: %u\n", nb_tx_test, clock());
-			printf("\nbefore resend: %u\n", clock());
-			
-			int T = 10;
-			while (T--) {
+			unsigned int st = clock();
+			printf("\nbefore resend: %u\n", st);
+			int ci;
+			for (ci = 0;ci<T;++ci) {
 				int i;
 				for (i = 0; i < nb_rx; ++i) {
 					unsigned char * d = ((unsigned char *)bufs[i]) + 256;
-					*(d+14+1) = 0x14;
+					*(d+14+1) = rand()%256;
 				}
 			}
-
-			printf("modified: %u\n", clock());
-			const uint16_t nb_tx = rte_eth_tx_burst(port, 0,
+			h_send = nb_rx;
+			nb_rx = _FireWall(bufs, nb_rx);
+			printf("%d Pkts have been dropped.\n", h_send - nb_rx);
+			unsigned int en = clock();
+			printf("modified: %u %u\n", en - st, en);
+			uint16_t nb_tx = rte_eth_tx_burst(port, 0,
 					bufs, nb_rx);
+			h_send = nb_tx;
+			while (h_send<nb_rx) {
+					nb_tx = rte_eth_tx_burst(port, 0,
+					bufs+h_send, nb_rx-h_send);
+				h_send+=nb_tx;
+			}
 			printf("after %u resend: %u\n", nb_tx, clock());
 			txcnt+=nb_tx;
 
@@ -246,6 +291,12 @@ main(int argc, char *argv[])
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
 	uint8_t portid;
+	
+	if (argc>0) T=atoi(argv[1]);
+	strcpy(argv[1],argv[0]); // unsafe, maybe make some mistakes
+	--argc;
+	argv++;
+	printf("[%s] mod %d times.\n",argv[0],T);
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(argc, argv);
