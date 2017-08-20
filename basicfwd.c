@@ -49,12 +49,17 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 64
 
-volatile int tot, tmpc, txcnt;
+volatile int tot, tmpc, txcnt, zeroFlag;
+unsigned char ds;
 int T = 10000;
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
+
+inline unsigned char * PktData(struct rte_mbuf * x) {
+	return (unsigned char *)(x->buf_addr + x->data_off);
+}
 
 /* basicfwd.c: Basic DPDK skeleton forwarding example. */
 
@@ -133,12 +138,37 @@ inline int IPcmp(unsigned char * x, unsigned char * y) {
 	return !(*x==*y&&*(x+1)==*(y+1)&&*(x+2)==*(y+2)&&*(x+3)==*(y+3));
 }
 
+inline void Pkt_View(struct rte_mbuf ** bufs, int nb_rx) {
+	int t, i;
+	for (t=0;t<nb_rx;++t) {
+		unsigned char * d = PktData(bufs[t]);
+//		d = d + 256;
+		//printf("%d %d %d %d\n",bufs[t]->data_off, bufs[t]->data_len,(unsigned char *)(bufs[t]->buf_addr) - (unsigned char *)bufs[t], (unsigned char *)rte_mbuf_data_dma_addr(bufs[t])-(unsigned char *)bufs[t]);
+		puts("\nPkt:\n");
+		printf("Dst MAC: ");
+		printMac(d);
+		printf("Src MAC: ");
+		printMac(d+6);
+		unsigned char * ipd = d+14;
+		printf("IPv%d len: %d ",*ipd>>4, (*(ipd+2)<<8)|(*(ipd+3)));
+		printf("src IP: ");
+		printIP(ipd+12);
+		printf("dst IP: ");
+		printIP(ipd+16);
+		printf("protocol: %d, serv.: %x", *(ipd + 9), *(ipd + 1));
+		printf("\n\x1b[0m");
+		for (i = 0; i < 34; ++i) printf("\x1b[33m%02x \x1b[0m",d[i]);
+		printf("\n\x1b[0m");
+	}
+
+}
+
 uint16_t _FireWall(struct rte_mbuf * b[], uint16_t n) {
 	uint16_t i, j, k;
 	k = 0;
 	for (i=0;i<n;++i) {
-		unsigned char * d = (unsigned char *)b[i];
-		d = d+256+14;
+		unsigned char * d = PktData(b[i]);
+		d = d+14;
 		int flag = 1;
 		for (j=0;j<black_list_cnt&&flag;++j) {
 			if (IPcmp(d+12,(unsigned char *)black_list[j])==0) {
@@ -148,7 +178,28 @@ uint16_t _FireWall(struct rte_mbuf * b[], uint16_t n) {
 			}
 		}
 		if (flag) {
-			memcpy(b[k++],b[i],sizeof(struct rte_mbuf));
+			b[k++] = b[i];
+		}
+	}
+	return k;
+}
+
+uint16_t _filter(struct rte_mbuf * b[], uint16_t n) {
+	uint16_t i, j, k;
+	k = 0;
+	for (i=0;i<n;++i) {
+		unsigned char * d = PktData(b[i]);
+		d = d+14;
+		int flag = 1;
+		
+			if (*(d+1)>=ds||!zeroFlag&&*(d+1)==0) {
+				flag = 0;
+				// printIP(d+12);
+				printf("%02x. ignore.\n",*(d+1));
+			}
+		
+		if (flag) {
+			b[k++] = b[i];
 		}
 	}
 	return k;
@@ -191,28 +242,11 @@ lcore_main(void)
 			struct rte_mbuf *bufs[BURST_SIZE];
 			uint16_t nb_rx = rte_eth_rx_burst(port, 0,
 					bufs, BURST_SIZE);
-			
-			int k = rand()%10;
+			nb_rx = _filter(bufs,nb_rx);
+			int k = rand()%1;
 			if (!k&&nb_rx>0) {
 				printf("\n[%u] recv: %u\n",port, nb_rx);
-				int i;
-				//struct ether_hdr *eth = rte_pktmbuf_mtod((struct rte_mbuf *)(((unsigned char *)(bufs[0]))+128), struct ether_hdr *);
-				unsigned char * d = ((unsigned char *)(bufs[0]))+256;
-				puts("\nPkt:\n");
-				printf("Dst MAC: ");
-				printMac(d);
-				printf("Src MAC: ");
-				printMac(d+6);
-				unsigned char * ipd = d+14;
-				printf("IPv%d len: %d ",*ipd>>4, (*(ipd+2)<<8)|(*(ipd+3)));
-				printf("src IP: ");
-				printIP(ipd+12);
-				printf("dst IP: ");
-				printIP(ipd+16);
-				printf("protocol: %d, serv.: %x", *(ipd + 9), *(ipd + 1));
-				printf("\n\x1b[0m");
-				for (i = 0; i < 34; ++i) printf("\x1b[33m%02x \x1b[0m",d[i]);
-				printf("\n\x1b[0m");
+				Pkt_View(bufs, nb_rx);
 			}
 			
 			if (unlikely(nb_rx == 0))
@@ -221,31 +255,35 @@ lcore_main(void)
 				tot+=nb_rx;
 				tmpc+=nb_rx;
 			}
-
+			int h_send;
+			unsigned int st;
 			/* Send burst of TX packets, to second port of pair. */
+			/*
 			printf("\ntest: resend: %u\n", clock());
 			uint16_t nb_tx_test = rte_eth_tx_burst(port, 0,
 					bufs, nb_rx);
-			int h_send = nb_tx_test;
+			h_send = nb_tx_test;
 			while (h_send<nb_rx) {
 					nb_tx_test = rte_eth_tx_burst(port, 0,
 					bufs + h_send, nb_rx - h_send);
 					h_send+=nb_tx_test;
 			}
-			printf("test: after %u resend: %u\n", nb_tx_test, clock());
-			unsigned int st = clock();
+			printf("test: after %u resend: %u\n", nb_tx_test, clock());*/
+			st = clock();
 			printf("\nbefore resend: %u\n", st);
+			
 			int ci;
+			h_send = nb_rx;
+			nb_rx = _FireWall(bufs, nb_rx);
 			for (ci = 0;ci<T;++ci) {
 				int i;
 				for (i = 0; i < nb_rx; ++i) {
-					unsigned char * d = ((unsigned char *)bufs[i]) + 256;
-					*(d+14+1) = rand()%256;
+					unsigned char * d = PktData(bufs[i]);
+					*(d+14+1) = ds;
 				}
 			}
-			h_send = nb_rx;
-			nb_rx = _FireWall(bufs, nb_rx);
 			printf("%d Pkts have been dropped.\n", h_send - nb_rx);
+			Pkt_View(bufs,nb_rx);
 			unsigned int en = clock();
 			printf("modified: %u %u\n", en - st, en);
 			uint16_t nb_tx = rte_eth_tx_burst(port, 0,
@@ -296,7 +334,9 @@ main(int argc, char *argv[])
 	strcpy(argv[1],argv[0]); // unsafe, maybe make some mistakes
 	--argc;
 	argv++;
+	zeroFlag = T&1;
 	printf("[%s] mod %d times.\n",argv[0],T);
+	if (zeroFlag) puts("recv from zero.");
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(argc, argv);
@@ -328,6 +368,9 @@ main(int argc, char *argv[])
 	//	printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	/* Call lcore_main on the master core only. */
+	srand(time(0));
+	printf("rte_size: %d\n",sizeof(struct rte_mbuf));
+	ds = T;
 	pthread_t disp;
 	int sig = 1;
 	pthread_create(&disp, NULL, disp_loop, &sig);
